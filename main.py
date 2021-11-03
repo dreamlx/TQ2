@@ -6,6 +6,8 @@ from datetime import date
 from tqsdk import TqApi, TqAuth, TqBacktest, TargetPosTask
 from tqsdk.ta import MA
 
+from tqsdk.tafunc import ma
+
 import datetime
 
 '''
@@ -15,30 +17,41 @@ import datetime
 
 api = TqApi(web_gui="http://127.0.0.1:9876", backtest=TqBacktest(start_dt=date(2018, 5, 1), end_dt=date(2018, 10, 1)), auth=TqAuth("18616770111", "yu079124"))
 
-ticks = api.get_tick_serial("DCE.m1901")
-# 获得 ni2011 10秒K线的引用
-klines = api.get_kline_serial("DCE.m1901", 10)
-print(datetime.datetime.fromtimestamp(klines.iloc[-1]["datetime"] / 1e9))
+
+SHORT = 30  # 短周期
+LONG = 60  # 长周期
+SYMBOL = "SHFE.bu1812"  # 合约代码
+
+print("策略开始运行")
+
+data_length = LONG + 2  # k线数据长度
+# "duration_seconds=60"为一分钟线, 日线的duration_seconds参数为: 24*60*60
+klines = api.get_kline_serial(SYMBOL, duration_seconds=60*10, data_length=data_length)
+target_pos = TargetPosTask(api, SYMBOL)
 
 while True:
     api.wait_update()
-    # 判断整个tick序列是否有变化
-    if api.is_changing(ticks):
-        # ticks.iloc[-1]返回序列中最后一个tick
-        print("tick变化", ticks.iloc[-1])
-    # 判断最后一根K线的时间是否有变化，如果发生变化则表示新产生了一根K线
-    if api.is_changing(klines.iloc[-1], "datetime"):
-        # datetime: 自unix epoch(1970-01-01 00:00:00 GMT)以来的纳秒数
-        print("新K线", datetime.datetime.fromtimestamp(klines.iloc[-1]["datetime"] / 1e9))
-    # 判断最后一根K线的收盘价是否有变化
-    if api.is_changing(klines.iloc[-1], "close"):
-        # klines.close返回收盘价序列
-        print("K线变化", datetime.datetime.fromtimestamp(klines.iloc[-1]["datetime"] / 1e9), klines.close.iloc[-1])
 
-# 画一次指标线
-ma = MA(klines, 30)  # 使用 tqsdk 自带指标函数计算均线
-klines["ma_MAIN"] = ma.ma  # 在主图中画一根默认颜色（红色）的 ma 指标线
+    if api.is_changing(klines.iloc[-1], "datetime"):  # 产生新k线:重新计算SMA
+        short_avg = ma(klines["close"], SHORT)  # 短周期
+        long_avg = ma(klines["close"], LONG)  # 长周期
 
-# 由于需要在浏览器中查看绘图结果，因此程序不能退出
-while True:
-    api.wait_update()
+        # 均线下穿，做空
+        if long_avg.iloc[-2] < short_avg.iloc[-2] and long_avg.iloc[-1] > short_avg.iloc[-1]:
+            target_pos.set_target_volume(-3)
+            print("均线下穿，做空")
+
+        # 均线上穿，做多
+        if short_avg.iloc[-2] < long_avg.iloc[-2] and short_avg.iloc[-1] > long_avg.iloc[-1]:
+            target_pos.set_target_volume(3)
+            print("均线上穿，做多")
+    # 画一次指标线
+
+        short_avg = MA(klines, SHORT)  # 短周期
+        long_avg = MA(klines, LONG)  # 长周期
+
+        klines["ma_MAIN"] = long_avg.ma  # 在主图中画一根默认颜色（红色）的 ma 指标线
+        klines["ma_MAIN2"] = short_avg.ma  # 在主图中画一根默认颜色（红色）的 ma 指标线
+        klines["ma_MAIN2.color"] = 0xFF0000EE
+
+
